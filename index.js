@@ -1,56 +1,60 @@
 const express = require('express');
-const axios = require('axios');
-const redis = require('redis');
-
+const fs = require('fs');
 const app = express();
+const PORT = 3000;
 
-const REDIS_PORT = process.env.PORT || 6379;
-const client = redis.createClient(REDIS_PORT);
-
-const TTL = {
-  'Buildings': 3600,
-  'Checklists': 7200,
-  'Members': 3600,
-  'Config': 86400
+// Middleware to read JSON files
+const readJSONFile = (filename) => {
+    return JSON.parse(fs.readFileSync(filename, 'utf8'));
 };
 
-function fetchFromApi(topic, projectId) {
-  switch (topic) {
-    case 'Buildings':
-      return axios.get(`/v1/structure?projectId=${projectId}&locationType=building`);
-    case 'Checklists':
-      return axios.get(`/v2/Checklists?projectId=${projectId}`);
-    case 'Members':
-      return axios.get(`/v1/project/${projectId}?fields=["members"]`);
-    case 'Config':
-      return axios.get(`/v1/configurations?projectId=${projectId}`);
-    default:
-      throw new Error('Invalid topic');
-  }
-}
-
-app.get('/cache/:topic/:projectId', async (req, res) => {
-  const { topic, projectId } = req.params;
-  const key = `${topic}-${projectId}`;
-
-  client.get(key, async (err, cachedData) => {
-    if (err) throw err;
-
-    if (cachedData) {
-      return res.json({ source: 'cache', data: JSON.parse(cachedData) });
-    } else {
-      try {
-        const response = await fetchFromApi(topic, projectId);
-        client.setex(key, TTL[topic], JSON.stringify(response.data));
-        res.json({ source: 'API', data: response.data });
-      } catch (error) {
-        res.status(500).json({ error: 'Failed to fetch data' });
-      }
+app.get('/v1/structure', (req, res) => {
+    const { projectId, locationType } = req.query;
+    if (locationType === 'building') {
+        const buildings = readJSONFile('./buildings.json').buildings;
+        const building = buildings.find(b => b.id === projectId);
+        if (building) {
+            return res.json(building);
+        }
+        return res.status(404).json({ error: 'Building not found' });
     }
-  });
+    res.status(400).json({ error: 'Invalid location type' });
 });
 
-const PORT = process.env.PORT || 3000;
+app.get('/v2/Checklists', (req, res) => {
+    const { projectId } = req.query;
+    const checklists = readJSONFile('./checklists.json').checklists;
+    const checklist = checklists.find(c => c.id === projectId);
+    if (checklist) {
+        return res.json(checklist);
+    }
+    return res.status(404).json({ error: 'Checklist not found' });
+});
+
+app.get('/v1/project/:projectId', (req, res) => {
+    const fields = req.query.fields ? JSON.parse(req.query.fields) : [];
+    if (fields.includes('members')) {
+        const members = readJSONFile('./members.json').members;
+        const member = members.find(m => m.id === req.params.projectId);
+        if (member) {
+            return res.json(member);
+        }
+        return res.status(404).json({ error: 'Member not found' });
+    }
+    res.status(400).json({ error: 'Invalid field' });
+});
+
+app.get('/v1/configurations', (req, res) => {
+    const { projectId } = req.query;
+    const configurations = readJSONFile('./configurations.json').configurations;
+    // Assuming configurations are structured by projectId
+    const config = configurations[projectId];
+    if (config) {
+        return res.json(config);
+    }
+    return res.status(404).json({ error: 'Configuration not found' });
+});
+
 app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+    console.log(`Server is running on http://localhost:${PORT}`);
 });
