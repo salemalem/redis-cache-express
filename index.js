@@ -6,6 +6,9 @@ const PORT = 3000;
 const redis = require('redis');
 const client = redis.createClient();
 
+(async () => {
+  await client.connect();
+})();
 client.on('connect', function() {
   console.log('Redis client is connected!'); // Connected!
 });
@@ -22,29 +25,37 @@ const readJSONFile = (filename) => {
 };
 
 const cacheMiddleware = (topic, idKeyExtractor) => {
-  try {
-    return (req, res, next) => {
-        const id = idKeyExtractor(req);
-        const cacheKey = `${topic}:${id}`;
-
-        client.get(cacheKey, (err, data) => {
-            if (err) throw err;
-
-            if (data !== null) {
-                res.send(JSON.parse(data));
-            } else {
-                next();
-            }
-        });
-    }; 
-  } catch (error) {
-    console.error('Cached Middleware Error:', error);
-    res.status(500).send('Internal Server Error');
-  }
+  return (req, res, next) => {
+    try {
+      const id = idKeyExtractor(req);
+      const cacheKey = `${topic}:${id}`;
+      console.log(`Cache key: ${cacheKey}`);
+      client.get(cacheKey).then((data) => {
+        console.log(`Data: ${data}`);
+        if (data !== null) {
+          res.send(JSON.parse(data));
+        } else {
+          next();
+        }
+      });
+    } catch (error) {
+      console.error('Cached Middleware Error:', error);
+      res.status(500).send('Internal Server Error');
+    }
+  }; 
 };
 
+app.use((err, req, res, next) => {
+  console.error(err);
+  res.status(500).send('Internal Server Error'); 
+})
 
-app.get('/v1/structure', async (req, res) => {
+/*
+ * http://localhost:3000/v1/structure?projectId=b8g7h2&locationType=building
+ */
+app.get('/v1/structure', cacheMiddleware('Buildings', req => {
+    return `${req.query.projectId}`; 
+  }), async (req, res) => {
   try {
     const { projectId, locationType } = req.query;
     if (locationType === 'building') {
@@ -52,7 +63,7 @@ app.get('/v1/structure', async (req, res) => {
         const building = buildings.find(b => b.id === projectId);
         if (building) {
           const cacheKey = `Buildings:${req.query.projectId}`;
-          client.setEx(cacheKey, 3600, JSON.stringify(building)); // TTL set to 1 hour (3600 seconds) as an example
+          client.setEx(cacheKey, 36, JSON.stringify(building)); // TTL set to 1 hour (3600 seconds) as an example
           return res.json(building);
         }
         return res.status(404).json({ error: 'Building not found' });
